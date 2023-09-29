@@ -1,0 +1,26 @@
+[project]
+name = "MQTT_Toolkits"
+version = "0.0.1"
+authors = [
+  { name="Yifei Ren", email="ryf0510@live.com" },
+]
+description = "A small example package"
+readme = "README.md"
+requires-python = ">=3.7"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+dependencies = [
+    "typer[all]",
+    "click_shell",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/ulfaric/PyCloudSim"
+"Bug Tracker" = "https://github.com/ulfaric/PyCloudSim/issues"
+
+[tool.setuptools]
+packages = ["MQTT_Toolkits"]
