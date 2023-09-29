@@ -19,8 +19,8 @@ dependencies = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/ulfaric/PyCloudSim"
-"Bug Tracker" = "https://github.com/ulfaric/PyCloudSim/issues"
+"Homepage" = "https://github.com/ulfaric/MQTToolkits"
+"Bug Tracker" = "https://github.com/ulfaric/MQTToolkits/issues"
 
 [tool.setuptools]
-packages = ["MQTT_Toolkits"]
+packages = ["MQTToolkits"]

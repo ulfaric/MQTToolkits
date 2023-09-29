@@ -1,3 +1,4 @@
+import json as j
 import os
 import threading
 import uuid
@@ -9,6 +10,7 @@ from click_shell import make_click_shell
 from paho.mqtt.client import Client
 from typer import Context
 from typing_extensions import Annotated
+from rich import print
 
 
 class Publisher:
@@ -22,7 +24,7 @@ class Publisher:
         while not self._stop:
             sleep(period)
             result = self.mqtt_client.publish(self.topic, payload)
-        typer.echo(f"Publisher {self.name} stopped.")
+        print(f":warning: [bold yellow]Publisher {self.name} stopped.[/bold yellow]\n")
 
     @property
     def name(self):
@@ -130,20 +132,26 @@ toolkit = Toolkit()
 
 @publisher.command("create")
 def create(
-    name: Annotated[str, typer.Option(help="The name of this publish thread.")],
-    topic: Annotated[str, typer.Option(help="The name of the topic.")],
-    payload: Annotated[Any, typer.Option(help="The payload to be published.")],
+    name: Annotated[str, typer.Argument(help="The name of this publish thread.")],
+    topic: Annotated[str, typer.Argument(help="The name of the topic.")],
+    payload: Annotated[str, typer.Argument(help="The payload to be published.")],
     period: Annotated[
-        float, typer.Option(help="The period for publishing the payload.")
+        float, typer.Argument(help="The period for publishing the payload.")
     ] = 1,
+    json: Annotated[bool, typer.Option(help="Whether the payload is a json file path.")] = False,
 ):
-    """Create a publisher thread."""
-    toolkit.createPublisher(name, topic, payload, period)
+    """Create a publisher. The publisher will continously publish the payload to the topic with the given period."""
+    if json:
+        file = open(payload, "r")
+        payload = str(j.load(file))
+        toolkit.createPublisher(name, topic, payload, period)
+    else:
+        toolkit.createPublisher(name, topic, payload, period)
 
 
 @publisher.command("list")
 def list():
-    """List all the publisher threads."""
+    """List all the publishers."""
     for publisher in toolkit.publishers:
         typer.echo(publisher.name)
 
@@ -152,37 +160,43 @@ def list():
 def delete(
     name: Annotated[str, typer.Argument(help="The name of the publisher thread.")]
 ):
-    """Delete a publisher thread."""
+    """Delete a publisher. The publisher will stop publishing the payload."""
     toolkit.deletePublisher(name)
 
 
 @app.callback(invoke_without_command=True)
 def launch(ctx: Context):
-    host = os.getenv("MQTT_HOST")
-    if host is None:
-        host = typer.prompt("MQTT Host")
-        os.environ["MQTT_HOST"] = host
+    while True:
+        host = os.getenv("MQTT_HOST")
+        if host is None:
+            host = typer.prompt("MQTT Host")
+            os.environ["MQTT_HOST"] = host
 
-    port = os.getenv("MQTT_PORT")
-    if port is None:
-        port = typer.prompt("MQTT Port")
-        os.environ["MQTT_PORT"] = port
+        port = os.getenv("MQTT_PORT")
+        if port is None:
+            port = typer.prompt("MQTT Port")
+            os.environ["MQTT_PORT"] = port
 
-    username = os.getenv("MQTT_USERNAME")
-    if username is None:
-        username = typer.prompt("MQTT Username")
-        os.environ["MQTT_USERNAME"] = username
+        username = os.getenv("MQTT_USERNAME")
+        if username is None:
+            username = typer.prompt("MQTT Username")
+            os.environ["MQTT_USERNAME"] = username
 
-    password = os.getenv("MQTT_PASSWORD")
-    if password is None:
-        password = typer.prompt("MQTT Password")
-        os.environ["MQTT_PASSWORD"] = password
+        password = os.getenv("MQTT_PASSWORD")
+        if password is None:
+            password = typer.prompt("MQTT Password", hide_input=True)
+            os.environ["MQTT_PASSWORD"] = password
+            
+        client_id = os.getenv("MQTT_CLIENT_ID")
+        if client_id is None:
+            client_id = typer.prompt("MQTT Client ID")
+            os.environ["MQTT_CLIENT_ID"] = client_id
 
-    try:
-        toolkit.connect(host, int(port), username, password)
-    except Exception as e:
-        typer.echo(e)
-        raise typer.Exit(1)
+        try:
+            toolkit.connect(host, int(port), username, password, client_id)
+            break
+        except Exception as e:
+            typer.echo(e)
 
     shell = make_click_shell(ctx, prompt="MQTT Injector>")
     shell.cmdloop()
