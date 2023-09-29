@@ -1,9 +1,11 @@
+import enum
 import json as j
 import os
 import threading
 import uuid
 from time import sleep
 from typing import Any, List
+from click import STRING
 
 import typer
 from click_shell import make_click_shell
@@ -13,18 +15,19 @@ from typing_extensions import Annotated
 from rich import print
 
 
+class ContentType(str, enum.Enum):
+    """Content type."""
+
+    FILE = "file"
+    STRING = "string"
+
+
 class Publisher:
     def __init__(self, name: str, topic: str, mqtt_client: Client) -> None:
         self._name = name
         self._topic = topic
         self._mqtt_client = mqtt_client
         self._stop = False
-
-    def publish(self, payload: Any, period: int | float):
-        while not self._stop:
-            sleep(period)
-            result = self.mqtt_client.publish(self.topic, payload)
-        print(f":warning: [bold yellow]Publisher {self.name} stopped.[/bold yellow]\n")
 
     @property
     def name(self):
@@ -71,21 +74,12 @@ class Toolkit:
             typer.echo(e)
             raise Exception("Failed to connect to the MQTT broker.")
 
-    def createPublisher(
-        self,
-        name: str | None,
-        topic: str,
-        payload: Any,
-        period: int | float,
-    ):
+    def createPublisher(self, name: str | None, topic: str):
         """Create a publisher."""
 
         publisher = Publisher(name or str(uuid.uuid4().int), topic, self.client)
         self.publishers.append(publisher)
-        publisher_thread = threading.Thread(
-            target=publisher.publish, args=(payload, period), daemon=True
-        )
-        publisher_thread.start()
+        return publisher
 
     def deletePublisher(self, name: str):
         """Delete a publisher thread."""
@@ -138,15 +132,41 @@ def create(
     period: Annotated[
         float, typer.Argument(help="The period for publishing the payload.")
     ] = 1,
-    json: Annotated[bool, typer.Option(help="Whether the payload is a json file path.")] = False,
+    content_type: Annotated[
+        ContentType, typer.Option(help="The content type of the payload")
+    ] = ContentType.STRING,
 ):
     """Create a publisher. The publisher will continously publish the payload to the topic with the given period."""
-    if json:
-        file = open(payload, "r")
-        payload = str(j.load(file))
-        toolkit.createPublisher(name, topic, payload, period)
-    else:
-        toolkit.createPublisher(name, topic, payload, period)
+    publisher = toolkit.createPublisher(name, topic)
+    if content_type == ContentType.FILE:
+
+        def _publishing():
+            for line in open(payload, "r").readlines():
+                if publisher._stop:
+                    print(f"[bold yellow] Publisher {publisher.name} interrupted. [/bold yellow]")
+                    break
+                sleep(period)
+                publisher.mqtt_client.publish(topic, line)
+            print(f"[bold green] Publisher {publisher.name} finished. [/bold green]")
+            toolkit.publishers.remove(publisher)
+
+        publisher_thread = threading.Thread(target=_publishing, daemon=True)
+        publisher_thread.start()
+        return
+
+    if content_type == ContentType.STRING:
+
+        def _publishing():
+            while True:
+                if publisher._stop:
+                    break
+                sleep(period)
+                publisher.mqtt_client.publish(topic, payload)
+            print(f"[bold yellow] Publisher {publisher.name} stopped. [/bold yellow]")
+
+        publisher_thread = threading.Thread(target=_publishing, daemon=True)
+        publisher_thread.start()
+        return
 
 
 @publisher.command("list")
@@ -186,7 +206,7 @@ def launch(ctx: Context):
         if password is None:
             password = typer.prompt("MQTT Password", hide_input=True)
             os.environ["MQTT_PASSWORD"] = password
-            
+
         client_id = os.getenv("MQTT_CLIENT_ID")
         if client_id is None:
             client_id = typer.prompt("MQTT Client ID")
