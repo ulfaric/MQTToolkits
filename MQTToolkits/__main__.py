@@ -1,18 +1,19 @@
 import enum
-import json as j
 import os
 import threading
 import uuid
+from datetime import datetime
 from time import sleep
-from typing import Any, List
-from click import STRING
+from typing import List
 
 import typer
 from click_shell import make_click_shell
 from paho.mqtt.client import Client
+from rich import print
+from rich.console import Console
+from rich.table import Table
 from typer import Context
 from typing_extensions import Annotated
-from rich import print
 
 
 class ContentType(str, enum.Enum):
@@ -28,6 +29,12 @@ class Publisher:
         self._topic = topic
         self._mqtt_client = mqtt_client
         self._stop = False
+        self._created_at = datetime.now()
+        self._published_messages = 0
+
+    def publish(self, payload: str):
+        self._mqtt_client.publish(self.topic, payload)
+        self._published_messages += 1
 
     @property
     def name(self):
@@ -40,6 +47,14 @@ class Publisher:
     @property
     def mqtt_client(self):
         return self._mqtt_client
+
+    @property
+    def lifetime(self):
+        return datetime.now() - self._created_at
+
+    @property
+    def published_messages(self):
+        return self._published_messages
 
 
 class Toolkit:
@@ -66,18 +81,19 @@ class Toolkit:
         self._username = username
         self._password = password
         self._client_id = client_id or str(uuid.uuid4().int)
-        self._client = Client(self.client_id)
+        self._client = Client(self.client_id, reconnect_on_failure=False)
         self.client.username_pw_set(self.username, self.password)
         try:
             self.client.connect(host, port)
         except Exception as e:
-            typer.echo(e)
-            raise Exception("Failed to connect to the MQTT broker.")
+            raise Exception(f"{e}\nFailed to connect to the MQTT broker.")
 
     def createPublisher(self, name: str | None, topic: str):
         """Create a publisher."""
 
         publisher = Publisher(name or str(uuid.uuid4().int), topic, self.client)
+        if publisher.name in [p.name for p in self.publishers]:
+            raise Exception("The publisher name already exists.")
         self.publishers.append(publisher)
         return publisher
 
@@ -137,21 +153,29 @@ def create(
     ] = ContentType.STRING,
 ):
     """Create a publisher. The publisher will continously publish the payload to the topic with the given period."""
-    publisher = toolkit.createPublisher(name, topic)
+    try:
+        publisher = toolkit.createPublisher(name, topic)
+    except Exception as e:
+        print(f"[bold red] {e} [/bold red]")
+        return
+
     if content_type == ContentType.FILE:
 
         def _publishing():
             for line in open(payload, "r").readlines():
                 if publisher._stop:
-                    print(f"[bold yellow] Publisher {publisher.name} interrupted. [/bold yellow]")
+                    print(
+                        f"[bold yellow] Publisher {publisher.name} interrupted. [/bold yellow]"
+                    )
                     break
                 sleep(period)
-                publisher.mqtt_client.publish(topic, line)
+                publisher.publish(line)
             print(f"[bold green] Publisher {publisher.name} finished. [/bold green]")
             toolkit.publishers.remove(publisher)
 
         publisher_thread = threading.Thread(target=_publishing, daemon=True)
         publisher_thread.start()
+
         return
 
     if content_type == ContentType.STRING:
@@ -161,7 +185,7 @@ def create(
                 if publisher._stop:
                     break
                 sleep(period)
-                publisher.mqtt_client.publish(topic, payload)
+                publisher.publish(payload)
             print(f"[bold yellow] Publisher {publisher.name} stopped. [/bold yellow]")
 
         publisher_thread = threading.Thread(target=_publishing, daemon=True)
@@ -172,8 +196,16 @@ def create(
 @publisher.command("list")
 def list():
     """List all the publishers."""
+    table = Table("Name", "Topic", "Life", "Sent Messages", title="Publishers")
+    console = Console()
     for publisher in toolkit.publishers:
-        typer.echo(publisher.name)
+        table.add_row(
+            publisher.name,
+            publisher.topic,
+            str(publisher.lifetime.seconds),
+            str(publisher.published_messages),
+        )
+    console.print(table)
 
 
 @publisher.command("delete")
@@ -204,7 +236,7 @@ def launch(ctx: Context):
 
         password = os.getenv("MQTT_PASSWORD")
         if password is None:
-            password = typer.prompt("MQTT Password", hide_input=True)
+            password = typer.prompt("MQTT Password", hide_input=True, confirmation_prompt=True)
             os.environ["MQTT_PASSWORD"] = password
 
         client_id = os.getenv("MQTT_CLIENT_ID")
@@ -214,9 +246,15 @@ def launch(ctx: Context):
 
         try:
             toolkit.connect(host, int(port), username, password, client_id)
+            print(f"[bold green] Connected to MQTT Broker {host}:{port} [/bold green]")
             break
         except Exception as e:
-            typer.echo(e)
+            os.environ.pop("MQTT_HOST")
+            os.environ.pop("MQTT_PORT")
+            os.environ.pop("MQTT_USERNAME")
+            os.environ.pop("MQTT_PASSWORD")
+            os.environ.pop("MQTT_CLIENT_ID")
+            print(f"[bold red] {e} [/bold red]")
 
     shell = make_click_shell(ctx, prompt="MQTT Injector>")
     shell.cmdloop()
